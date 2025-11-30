@@ -1,0 +1,62 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Merckrs
+//
+// -----------------------------------------------------------------------------
+// EIGEN-FILTER PRO: INSTITUTIONAL RISK MODEL
+// -----------------------------------------------------------------------------
+// 💡 THIS PROJECT IS OPEN SOURCE AND FREE.
+// If this tool helps you, support the development via Patreon:
+// https://patreon.com/merckrs
+// -----------------------------------------------------------------------------
+
+//@version=5
+indicator("Matrix Eigen-Filter Pro [Institutional Risk Model]", shorttitle="Eigen-Risk Pro", overlay=false)
+
+// --- 1. SETTINGS ---
+group_asset = "Asset Configuration"
+ticker2_input = input.symbol("BITSTAMP:BTCUSD", "Benchmark Asset (Leader)", group=group_asset)
+length = input.int(30, "Analysis Window (Days)", minval=10, group=group_asset)
+
+group_math = "Sensitivity & Calibration"
+use_zscore = input.bool(true, "Smart Dynamic Threshold (Z-Score)", group=group_math)
+z_lookback = input.int(200, "Historical Memory (Days)", group=group_math)
+z_threshold = input.float(2.0, "Crisis Trigger (Sigma)", group=group_math)
+smooth_len = input.int(3, "Signal Smoothing", group=group_math)
+
+// --- 2. CALCULATION ENGINE ---
+price1 = close
+price2 = request.security(ticker2_input, timeframe.period, close)
+ret1 = math.log(price1 / price1[1])
+ret2 = math.log(price2 / price2[1])
+
+mean1 = ta.sma(ret1, length)
+mean2 = ta.sma(ret2, length)
+var1 = ta.sma(math.pow(ret1 - mean1, 2), length)
+var2 = ta.sma(math.pow(ret2 - mean2, 2), length)
+cov12 = ta.sma((ret1 - mean1) * (ret2 - mean2), length)
+
+trace = var1 + var2
+det = (var1 * var2) - (cov12 * cov12)
+delta = (trace * trace) - (4 * det)
+lambda1 = (trace + math.sqrt(math.max(delta, 0))) / 2
+lambda2 = (trace - math.sqrt(math.max(delta, 0))) / 2
+
+raw_risk = (lambda2 > 0) ? (lambda1 / lambda2) : 0
+smoothed_risk = ta.sma(raw_risk, smooth_len)
+
+risk_mean = ta.sma(smoothed_risk, z_lookback)
+risk_std = ta.stdev(smoothed_risk, z_lookback)
+z_score = (smoothed_risk - risk_mean) / (risk_std + 0.00001)
+
+final_metric = use_zscore ? z_score : smoothed_risk
+threshold_val = use_zscore ? z_threshold : 30.0
+
+// --- 3. VISUALIZATION ---
+risk_color = final_metric > threshold_val ? color.new(#9c27b0, 0) : final_metric > (threshold_val * 0.5) ? color.new(#ff9800, 0) : color.new(#2196f3, 0)
+
+p1 = plot(final_metric, "Systemic Risk Score", color=risk_color, linewidth=2)
+p2 = plot(use_zscore ? 0 : 1, "Baseline", color=color.gray, display=display.none)
+fill(p1, p2, color=color.new(risk_color, 75), title="Risk Density")
+hline(threshold_val, "CRISIS THRESHOLD", color=color.red, linestyle=hline.style_dashed)
+barcolor(final_metric > threshold_val ? color.rgb(116, 116, 116) : na, title="Zombie Candles")
+bgcolor(final_metric > (threshold_val * 1.5) ? color.new(color.red, 90) : na)
